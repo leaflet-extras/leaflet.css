@@ -16,5 +16,5 @@ class LCCS
 		true;
 	
 L.CSS = LCCS
-L.css = ()->
-	return new L.CSS()
+L.css = (params...)->
+	return new L.CSS(params...)
