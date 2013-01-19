@@ -8,3 +8,4 @@ L.marker([42,-72.5], {icon: L.spriteIcon("orange")}).addTo(m);
 L.marker([42.5,-72.5], {icon: L.spriteIcon("purple")}).addTo(m);
 L.marker([42.5,-72], {icon: L.spriteIcon("violet")}).addTo(m);
 L.marker([42.5,-71.5], {icon: L.spriteIcon("yellow")}).addTo(m);
+L.marker([42.5,-71]).addTo(m);

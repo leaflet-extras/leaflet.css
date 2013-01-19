@@ -20,3 +20,6 @@ build with
 npm install #install dependencies
 cake build # if that gets you an error try this first
 npm install -g coffee-script # you may need a sudo
+```
+
+demo includes [leaflet.sprite](https://github.com/calvinmetcalf/leaflet.sprite)
