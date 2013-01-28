@@ -1,5 +1,5 @@
 class LCCS
-	constructor : (css=cssFiles)->
+	constructor : (css)->
 		imagePath = L.Icon.Default.imagePath
 		css[0] = css[0].replace "url(images", "url(#{ imagePath }"
 		@addStyle css
@@ -16,5 +16,8 @@ class LCCS
 		true;
 	
 L.CSS = LCCS
+
 L.css = (params...)->
 	return new L.CSS(params...)
+	
+L.css(cssFiles)

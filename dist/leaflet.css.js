@@ -8,9 +8,6 @@
 
     function LCCS(css) {
       var imagePath;
-      if (css == null) {
-        css = cssFiles;
-      }
       imagePath = L.Icon.Default.imagePath;
       css[0] = css[0].replace("url(images", "url(" + imagePath);
       this.addStyle(css);
@@ -45,5 +42,7 @@
       return Object(result) === result ? result : child;
     })(L.CSS, params, function(){});
   };
+
+  L.css(cssFiles);
 
 }).call(this);
