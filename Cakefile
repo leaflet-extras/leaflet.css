@@ -17,4 +17,4 @@ task 'build', 'build it', () ->
 			ast.figure_out_scope();
 			ast.compute_char_frequency();
 			ast.mangle_names();
-			fs.writeFile './dist/leaflet.css.min.js',  "var css = #{ css };#{ ast.print_to_string() }"
+			fs.writeFile './dist/leaflet.css.min.js',  ast.print_to_string()
