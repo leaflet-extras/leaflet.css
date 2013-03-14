@@ -5,7 +5,8 @@
 		"coffee-script":"1.x",
 		"uglify-js" : ">= 0.0.1",
 		"css-condense":">= 0.0.1",
-		"async":">= 0.0.1"
+		"async":">= 0.0.1",
+		"request":">=2"
 	},
 	"author": {
 		"name" : "Calvin Metcalf",
