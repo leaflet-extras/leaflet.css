@@ -5,9 +5,12 @@ class LCCS
 		@addStyle css
 
 	addStyle : (styles)->
-		unless document.createElement
+		if document.createStyleSheet
 			styleSheet = document.createStyleSheet()
-			styleSheet.cssText = styles.join("\n")
+			if  L.Browser.vml
+				styleSheet.cssText = styles.join("\n")
+			else
+				styleSheet.cssText = styles[0]
 		else
 			head = document.getElementsByTagName("head")[0]
 			styleElt = document.createElement "style"
