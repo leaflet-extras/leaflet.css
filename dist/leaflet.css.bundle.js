@@ -8354,7 +8354,7 @@ L.Map.include({
 
     LCCS.prototype.addStyle = function(styles) {
       var head, styleElt, styleSheet;
-      if (document.createStyleSheet) {
+      if (!document.createElement) {
         styleSheet = document.createStyleSheet();
         styleSheet.cssText = styles.join("\n");
       } else {

@@ -5,7 +5,7 @@ class LCCS
 		@addStyle css
 
 	addStyle : (styles)->
-		if document.createStyleSheet
+		unless document.createElement
 			styleSheet = document.createStyleSheet()
 			styleSheet.cssText = styles.join("\n")
 		else
