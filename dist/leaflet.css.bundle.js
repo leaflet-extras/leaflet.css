@@ -7,7 +7,7 @@
 var oldL = window.L,
     L = {};
 
-L.version = '0.6';
+L.version = '0.6.4';
 
 // define Leaflet for Node module pattern loaders, including Browserify
 if (typeof module === 'object' && typeof module.exports === 'object') {
@@ -1092,46 +1092,30 @@ L.DomUtil.TRANSITION_END =
 	var userSelectProperty = L.DomUtil.testProp(
 		['userSelect', 'WebkitUserSelect', 'OUserSelect', 'MozUserSelect', 'msUserSelect']);
 
-	var userDragProperty = L.DomUtil.testProp(
-		['userDrag', 'WebkitUserDrag', 'OUserDrag', 'MozUserDrag', 'msUserDrag']);
-
 	L.extend(L.DomUtil, {
 		disableTextSelection: function () {
+			L.DomEvent.on(window, 'selectstart', L.DomEvent.preventDefault);
 			if (userSelectProperty) {
 				var style = document.documentElement.style;
 				this._userSelect = style[userSelectProperty];
 				style[userSelectProperty] = 'none';
-			} else {
-				L.DomEvent.on(window, 'selectstart', L.DomEvent.stop);
 			}
 		},
 
 		enableTextSelection: function () {
+			L.DomEvent.off(window, 'selectstart', L.DomEvent.preventDefault);
 			if (userSelectProperty) {
 				document.documentElement.style[userSelectProperty] = this._userSelect;
 				delete this._userSelect;
-			} else {
-				L.DomEvent.off(window, 'selectstart', L.DomEvent.stop);
 			}
 		},
 
 		disableImageDrag: function () {
-			if (userDragProperty) {
-				var style = document.documentElement.style;
-				this._userDrag = style[userDragProperty];
-				style[userDragProperty] = 'none';
-			} else {
-				L.DomEvent.on(window, 'dragstart', L.DomEvent.stop);
-			}
+			L.DomEvent.on(window, 'dragstart', L.DomEvent.preventDefault);
 		},
 
 		enableImageDrag: function () {
-			if (userDragProperty) {
-				document.documentElement.style[userDragProperty] = this._userDrag;
-				delete this._userDrag;
-			} else {
-				L.DomEvent.off(window, 'dragstart', L.DomEvent.stop);
-			}
+			L.DomEvent.off(window, 'dragstart', L.DomEvent.preventDefault);
 		}
 	});
 })();
@@ -1629,7 +1613,7 @@ L.Map = L.Class.extend({
 		return this.fire('moveend');
 	},
 
-	setMaxBounds: function (bounds) {
+	setMaxBounds: function (bounds, options) {
 		bounds = L.latLngBounds(bounds);
 
 		this.options.maxBounds = bounds;
@@ -1646,7 +1630,7 @@ L.Map = L.Class.extend({
 
 		if (this._loaded) {
 			if (this._zoom < minZoom) {
-				this.setView(bounds.getCenter(), minZoom);
+				this.setView(bounds.getCenter(), minZoom, options);
 			} else {
 				this.panInsideBounds(bounds);
 			}
@@ -1724,10 +1708,14 @@ L.Map = L.Class.extend({
 
 		if (this._loaded) {
 			layer.onRemove(this);
-			this.fire('layerremove', {layer: layer});
 		}
 
 		delete this._layers[id];
+
+		if (this._loaded) {
+			this.fire('layerremove', {layer: layer});
+		}
+
 		if (this._zoomBoundLayers[id]) {
 			delete this._zoomBoundLayers[id];
 			this._updateZoomLevels();
@@ -1856,18 +1844,15 @@ L.Map = L.Class.extend({
 	},
 
 	getMinZoom: function () {
-		var z1 = this.options.minZoom || 0,
-		    z2 = this._layersMinZoom || 0,
-		    z3 = this._boundsMinZoom || 0;
-
-		return Math.max(z1, z2, z3);
+		var z1 = this._layersMinZoom === undefined ? 0 : this._layersMinZoom,
+		    z2 = this._boundsMinZoom === undefined ? 0 : this._boundsMinZoom;
+		return this.options.minZoom === undefined ? Math.max(z1, z2) : this.options.minZoom;
 	},
 
 	getMaxZoom: function () {
-		var z1 = this.options.maxZoom === undefined ? Infinity : this.options.maxZoom,
-		    z2 = this._layersMaxZoom  === undefined ? Infinity : this._layersMaxZoom;
-
-		return Math.min(z1, z2);
+		return this.options.maxZoom === undefined ?
+			(this._layersMaxZoom === undefined ? Infinity : this._layersMaxZoom) :
+			this.options.maxZoom;
 	},
 
 	getBoundsZoom: function (bounds, inside, padding) { // (LatLngBounds[, Boolean, Point]) -> Number
@@ -2187,16 +2172,15 @@ L.Map = L.Class.extend({
 	},
 
 	_onMouseClick: function (e) {
-		// jshint camelcase: false
-		if (!this._loaded || (!e._simulated && this.dragging && this.dragging.moved()) || e._leaflet_stop) { return; }
+		if (!this._loaded || (!e._simulated && this.dragging && this.dragging.moved()) ||
+		        L.DomEvent._skipped(e)) { return; }
 
 		this.fire('preclick');
 		this._fireMouseEvent(e);
 	},
 
 	_fireMouseEvent: function (e) {
-		// jshint camelcase: false
-		if (!this._loaded || e._leaflet_stop) { return; }
+		if (!this._loaded || L.DomEvent._skipped(e)) { return; }
 
 		var type = e.type;
 
@@ -2335,7 +2319,7 @@ L.Projection.Mercator = {
 		    lng = point.x * d / r,
 		    tmp = r2 / r,
 		    eccent = Math.sqrt(1 - (tmp * tmp)),
-		    ts = Math.exp(- point.y / r2),
+		    ts = Math.exp(- point.y / r),
 		    phi = (Math.PI / 2) - 2 * Math.atan(ts),
 		    numIter = 15,
 		    tol = 1e-7,
@@ -2606,10 +2590,7 @@ L.TileLayer = L.Class.extend({
 				var className = 'leaflet-tile-container leaflet-zoom-animated';
 
 				this._bgBuffer = L.DomUtil.create('div', className, this._container);
-				this._bgBuffer.style.zIndex = 1;
-
 				this._tileContainer = L.DomUtil.create('div', className, this._container);
-				this._tileContainer.style.zIndex = 2;
 
 			} else {
 				this._tileContainer = this._container;
@@ -3049,6 +3030,11 @@ L.TileLayer.Canvas = L.TileLayer.extend({
 	},
 
 	redraw: function () {
+		if (this._map) {
+			this._reset({hard: true});
+			this._update();
+		}
+		
 		for (var i in this._tiles) {
 			this._redrawTile(this._tiles[i]);
 		}
@@ -3538,10 +3524,10 @@ L.Marker = L.Class.extend({
 		if (newShadow !== this._shadow) {
 			this._removeShadow();
 			addShadow = true;
+		}
 
-			if (newShadow) {
-				L.DomUtil.addClass(newShadow, classToAdd);
-			}
+		if (newShadow) {
+			L.DomUtil.addClass(newShadow, classToAdd);
 		}
 		this._shadow = newShadow;
 
@@ -3679,6 +3665,8 @@ L.Marker = L.Class.extend({
 		if (this._map) {
 			this._updateOpacity();
 		}
+		
+		return this;
 	},
 
 	_updateOpacity: function () {
@@ -3903,7 +3891,8 @@ L.Popup = L.Class.extend({
 		L.DomEvent.disableClickPropagation(wrapper);
 
 		this._contentNode = L.DomUtil.create('div', prefix + '-content', wrapper);
-		L.DomEvent.on(this._contentNode, 'wheel', L.DomEvent.stopPropagation);
+		L.DomEvent.on(this._contentNode, 'mousewheel', L.DomEvent.stopPropagation);
+		L.DomEvent.on(this._contentNode, 'MozMousePixelScroll', L.DomEvent.stopPropagation);
 		L.DomEvent.on(wrapper, 'contextmenu', L.DomEvent.stopPropagation);
 		this._tipContainer = L.DomUtil.create('div', prefix + '-tip-container', container);
 		this._tip = L.DomUtil.create('div', prefix + '-tip', this._tipContainer);
@@ -4304,6 +4293,9 @@ L.FeatureGroup = L.LayerGroup.extend({
 	},
 
 	removeLayer: function (layer) {
+		if (!this.hasLayer(layer)) {
+			return this;
+		}
 		if (layer in this._layers) {
 			layer = this._layers[layer];
 		}
@@ -4373,9 +4365,11 @@ L.Path = L.Class.extend({
 		// how much to extend the clip area around the map view
 		// (relative to its size, e.g. 0.5 is half the screen in each direction)
 		// set it so that SVG element doesn't exceed 1280px (vectors flicker on dragend if it is)
-		CLIP_PADDING: L.Browser.mobile ?
-			Math.max(0, Math.min(0.5,
-			        (1280 / Math.max(window.innerWidth, window.innerHeight) - 1) / 2)) : 0.5
+		CLIP_PADDING: (function () {
+			var max = L.Browser.mobile ? 1280 : 2000,
+			    target = (max / Math.max(window.outerWidth, window.outerHeight) - 1) / 2;
+			return Math.max(0, Math.min(0.5, target));
+		})()
 	},
 
 	options: {
@@ -5635,6 +5629,16 @@ L.polygon = function (latlngs, options) {
 				}
 
 				return this;
+			},
+
+			getLatLngs: function () {
+				var latlngs = [];
+
+				this.eachLayer(function (layer) {
+					latlngs.push(layer.getLatLngs());
+				});
+
+				return latlngs;
 			}
 		});
 	}
@@ -5936,12 +5940,13 @@ L.GeoJSON = L.FeatureGroup.extend({
 
 	addData: function (geojson) {
 		var features = L.Util.isArray(geojson) ? geojson : geojson.features,
-		    i, len;
+		    i, len, feature;
 
 		if (features) {
 			for (i = 0, len = features.length; i < len; i++) {
 				// Only add this if geometry or geometries are set and not null
-				if (features[i].geometries || features[i].geometry || features[i].features) {
+				feature = features[i];
+				if (feature.geometries || feature.geometry || feature.features || feature.coordinates) {
 					this.addData(features[i]);
 				}
 			}
@@ -6190,11 +6195,6 @@ L.geoJson = function (geojson, options) {
  */
 
 L.DomEvent = {
-	WHEEL:
-		'onwheel' in document ? 'wheel' :
-		'onmousewheel' in document ? 'mousewheel' :
-			'MozMousePixelScroll',
-
 	/* inspired by John Resig, Dean Edwards and YUI addEvent implementations */
 	addListener: function (obj, type, fn, context) { // (HTMLElement, String, Function[, Object])
 
@@ -6215,13 +6215,13 @@ L.DomEvent = {
 			this.addDoubleTapListener(obj, handler, id);
 		}
 
-		if (type === 'wheel' || type === 'mousewheel') {
-			type = L.DomEvent.WHEEL;
-		}
-
 		if ('addEventListener' in obj) {
 
-			if ((type === 'mouseenter') || (type === 'mouseleave')) {
+			if (type === 'mousewheel') {
+				obj.addEventListener('DOMMouseScroll', handler, false);
+				obj.addEventListener(type, handler, false);
+
+			} else if ((type === 'mouseenter') || (type === 'mouseleave')) {
 
 				originalHandler = handler;
 				newType = (type === 'mouseenter' ? 'mouseover' : 'mouseout');
@@ -6261,10 +6261,6 @@ L.DomEvent = {
 
 		if (!handler) { return this; }
 
-		if (type === 'wheel' || type === 'mousewheel') {
-			type = L.DomEvent.WHEEL;
-		}
-
 		if (L.Browser.msTouch && type.indexOf('touch') === 0) {
 			this.removeMsTouchListener(obj, type, id);
 		} else if (L.Browser.touch && (type === 'dblclick') && this.removeDoubleTapListener) {
@@ -6272,7 +6268,11 @@ L.DomEvent = {
 
 		} else if ('removeEventListener' in obj) {
 
-			if ((type === 'mouseenter') || (type === 'mouseleave')) {
+			if (type === 'mousewheel') {
+				obj.removeEventListener('DOMMouseScroll', handler, false);
+				obj.removeEventListener(type, handler, false);
+
+			} else if ((type === 'mouseenter') || (type === 'mouseleave')) {
 				obj.removeEventListener((type === 'mouseenter' ? 'mouseover' : 'mouseout'), handler, false);
 			} else {
 				obj.removeEventListener(type, handler, false);
@@ -6324,33 +6324,57 @@ L.DomEvent = {
 
 	getMousePosition: function (e, container) {
 
-		var body = document.body,
+		var ie7 = L.Browser.ie7,
+		    body = document.body,
 		    docEl = document.documentElement,
-		    x = e.pageX ? e.pageX : e.clientX + body.scrollLeft + docEl.scrollLeft,
-		    y = e.pageY ? e.pageY : e.clientY + body.scrollTop + docEl.scrollTop,
-		    pos = new L.Point(x, y);
+		    x = e.pageX ? e.pageX - body.scrollLeft - docEl.scrollLeft: e.clientX,
+		    y = e.pageY ? e.pageY - body.scrollTop - docEl.scrollTop: e.clientY,
+		    pos = new L.Point(x, y),
+		    rect = container.getBoundingClientRect(),
+		    left = rect.left - container.clientLeft,
+		    top = rect.top - container.clientTop;
 
-		return (container ? pos._subtract(L.DomUtil.getViewportOffset(container)) : pos);
+		// webkit (and ie <= 7) handles RTL scrollLeft different to everyone else
+		// https://code.google.com/p/closure-library/source/browse/trunk/closure/goog/style/bidi.js
+		if (!L.DomUtil.documentIsLtr() && (L.Browser.webkit || ie7)) {
+			left += container.scrollWidth - container.clientWidth;
+
+			// ie7 shows the scrollbar by default and provides clientWidth counting it, so we
+			// need to add it back in if it is visible; scrollbar is on the left as we are RTL
+			if (ie7 && L.DomUtil.getStyle(container, 'overflow-y') !== 'hidden' &&
+			           L.DomUtil.getStyle(container, 'overflow') !== 'hidden') {
+				left += 17;
+			}
+		}
+
+		return pos._subtract(new L.Point(left, top));
 	},
 
 	getWheelDelta: function (e) {
+
 		var delta = 0;
 
-		if (e.type === 'wheel') {
-			delta = -e.deltaY / (e.deltaMode ? 1 : 120);
-		} else if (e.type === 'mousewheel') {
+		if (e.wheelDelta) {
 			delta = e.wheelDelta / 120;
-		} else if (e.type === 'MozMousePixelScroll') {
-			delta = -e.detail;
 		}
-
+		if (e.detail) {
+			delta = -e.detail / 3;
+		}
 		return delta;
 	},
 
-	_fakeStop: function stop(e) {
-		// fakes stopPropagation by setting a special event flag checked in Map mouse events handler
-		// jshint camelcase: false
-		e._leaflet_stop = true;
+	_skipEvents: {},
+
+	_fakeStop: function (e) {
+		// fakes stopPropagation by setting a special event flag, checked/reset with L.DomEvent._skipped(e)
+		L.DomEvent._skipEvents[e.type] = true;
+	},
+
+	_skipped: function (e) {
+		var skipped = this._skipEvents[e.type];
+		// reset when checking, as it's only used in map container and propagates outside of the map
+		this._skipEvents[e.type] = false;
+		return skipped;
 	},
 
 	// check if element really left/entered the event target (for mouseenter/mouseleave)
@@ -6386,10 +6410,22 @@ L.DomEvent = {
 		return e;
 	},
 
-	// this solves a bug in Android WebView where a single touch triggers two click events.
+	// this is a horrible workaround for a bug in Android where a single touch triggers two click events
 	_filterClick: function (e, handler) {
-		// check if click is simulated on the element, and if it is, reject any non-simulated events
-		if (e.target._simulatedClick && !e._simulated) { return; }
+		var timeStamp = (e.timeStamp || e.originalEvent.timeStamp),
+			elapsed = L.DomEvent._lastClick && (timeStamp - L.DomEvent._lastClick);
+
+		// are they closer together than 1000ms yet more than 100ms?
+		// Android typically triggers them ~300ms apart while multiple listeners
+		// on the same event should be triggered far faster;
+		// or check if click is simulated on the element, and if it is, reject any non-simulated events
+
+		if ((elapsed && elapsed > 100 && elapsed < 1000) || (e.target._simulatedClick && !e._simulated)) {
+			L.DomEvent.stop(e);
+			return;
+		}
+		L.DomEvent._lastClick = timeStamp;
+
 		return handler(e);
 	}
 };
@@ -6454,6 +6490,7 @@ L.Draggable = L.Class.extend({
 		if (L.Draggable._disabled) { return; }
 
 		L.DomUtil.disableImageDrag();
+		L.DomUtil.disableTextSelection();
 
 		var first = e.touches ? e.touches[0] : e,
 		    el = first.target;
@@ -6493,7 +6530,6 @@ L.Draggable = L.Class.extend({
 			this._startPos = L.DomUtil.getPosition(this._element).subtract(offset);
 
 			if (!L.Browser.touch) {
-				L.DomUtil.disableTextSelection();
 				L.DomUtil.addClass(document.body, 'leaflet-dragging');
 			}
 		}
@@ -6513,7 +6549,6 @@ L.Draggable = L.Class.extend({
 
 	_onUp: function () {
 		if (!L.Browser.touch) {
-			L.DomUtil.enableTextSelection();
 			L.DomUtil.removeClass(document.body, 'leaflet-dragging');
 		}
 
@@ -6524,6 +6559,7 @@ L.Draggable = L.Class.extend({
 		}
 
 		L.DomUtil.enableImageDrag();
+		L.DomUtil.enableTextSelection();
 
 		if (this._moved) {
 			// ensure drag is not fired after dragend
@@ -6600,6 +6636,8 @@ L.Map.Drag = L.Handler.extend({
 			if (map.options.worldCopyJump) {
 				this._draggable.on('predrag', this._onPreDrag, this);
 				map.on('viewreset', this._onViewReset, this);
+
+				this._onViewReset();
 			}
 		}
 		this._draggable.enable();
@@ -6752,12 +6790,14 @@ L.Map.mergeOptions({
 
 L.Map.ScrollWheelZoom = L.Handler.extend({
 	addHooks: function () {
-		L.DomEvent.on(this._map._container, 'wheel', this._onWheelScroll, this);
+		L.DomEvent.on(this._map._container, 'mousewheel', this._onWheelScroll, this);
+		L.DomEvent.on(this._map._container, 'MozMousePixelScroll', L.DomEvent.preventDefault);
 		this._delta = 0;
 	},
 
 	removeHooks: function () {
-		L.DomEvent.off(this._map._container, 'wheel', this._onWheelScroll);
+		L.DomEvent.off(this._map._container, 'mousewheel', this._onWheelScroll);
+		L.DomEvent.off(this._map._container, 'MozMousePixelScroll', L.DomEvent.preventDefault);
 	},
 
 	_onWheelScroll: function (e) {
@@ -7459,7 +7499,7 @@ L.Map.Keyboard = L.Handler.extend({
 		var body = document.body,
 		    docEl = document.documentElement,
 		    top = body.scrollTop || docEl.scrollTop,
-		    left = body.scrollTop || docEl.scrollLeft;
+		    left = body.scrollLeft || docEl.scrollLeft;
 
 		this._map._container.focus();
 
@@ -8116,7 +8156,7 @@ L.Control.Layers = L.Control.extend({
 
 		if (!L.Browser.touch) {
 			L.DomEvent.disableClickPropagation(container);
-			L.DomEvent.on(container, 'wheel', L.DomEvent.stopPropagation);
+			L.DomEvent.on(container, 'mousewheel', L.DomEvent.stopPropagation);
 		} else {
 			L.DomEvent.on(container, 'click', L.DomEvent.stopPropagation);
 		}
@@ -8332,9 +8372,14 @@ L.PosAnimation = L.Class.extend({
 	},
 
 	_onStep: function () {
+		var stepPos = this._getPos();
+		if (!stepPos) {
+			this._onTransitionEnd();
+			return;
+		}
 		// jshint camelcase: false
 		// make L.DomUtil.getPosition return intermediate position value during animation
-		this._el._leaflet_pos = this._getPos();
+		this._el._leaflet_pos = stepPos;
 
 		this.fire('step');
 	},
@@ -8351,8 +8396,9 @@ L.PosAnimation = L.Class.extend({
 
 		if (L.Browser.any3d) {
 			matches = style[L.DomUtil.TRANSFORM].match(this._transformRe);
-			left = matches ? parseFloat(matches[1]) : 0;
-			top  = matches ? parseFloat(matches[2]) : 0;
+			if (!matches) { return; }
+			left = parseFloat(matches[1]);
+			top  = parseFloat(matches[2]);
 		} else {
 			left = parseFloat(style.left);
 			top  = parseFloat(style.top);
@@ -8582,6 +8628,10 @@ L.Map.include(!L.DomUtil.TRANSITION ? {} : {
 		}
 	},
 
+	_nothingToAnimate: function () {
+		return !this._container.getElementsByClassName('leaflet-zoom-animated').length;
+	},
+
 	_tryAnimatedZoom: function (center, zoom, options) {
 
 		if (this._animatingZoom) { return true; }
@@ -8589,7 +8639,7 @@ L.Map.include(!L.DomUtil.TRANSITION ? {} : {
 		options = options || {};
 
 		// don't animate if disabled, not supported or zoom difference is too large
-		if (!this._zoomAnimated || options.animate === false ||
+		if (!this._zoomAnimated || options.animate === false || this._nothingToAnimate() ||
 		        Math.abs(zoom - this._zoom) > this.options.zoomAnimationThreshold) { return false; }
 
 		// offset is the pixel coords of the zoom origin relative to the current center
@@ -8656,28 +8706,13 @@ L.Map.include(!L.DomUtil.TRANSITION ? {} : {
 
 L.TileLayer.include({
 	_animateZoom: function (e) {
-		var firstFrame = false;
-
 		if (!this._animating) {
 			this._animating = true;
-			firstFrame = true;
-		}
-
-		if (firstFrame) {
 			this._prepareBgBuffer();
 		}
 
-		var bg = this._bgBuffer;
-
-		if (firstFrame) {
-			//prevent bg buffer from clearing right after zoom
-			clearTimeout(this._clearBgBufferTimer);
-
-			// hack to make sure transform is updated before running animation
-			L.Util.falseFn(bg.offsetWidth);
-		}
-
-		var transform = L.DomUtil.TRANSFORM,
+		var bg = this._bgBuffer,
+		    transform = L.DomUtil.TRANSFORM,
 		    initialTransform = e.delta ? L.DomUtil.getTranslateString(e.delta) : bg.style[transform],
 		    scaleStr = L.DomUtil.getScaleString(e.scale, e.origin);
 
@@ -8691,9 +8726,7 @@ L.TileLayer.include({
 		    bg = this._bgBuffer;
 
 		front.style.visibility = '';
-		front.style.zIndex = 2;
-
-		bg.style.zIndex = 1;
+		front.parentNode.appendChild(front); // Bring to fore
 
 		// force reflow
 		L.Util.falseFn(bg.offsetWidth);
@@ -8737,6 +8770,9 @@ L.TileLayer.include({
 		bg = this._bgBuffer = front;
 
 		this._stopLoadingImages(bg);
+
+		//prevent bg buffer from clearing right after zoom
+		clearTimeout(this._clearBgBufferTimer);
 	},
 
 	_getLoadedTilesPercentage: function (container) {
@@ -8856,7 +8892,7 @@ L.Map.include({
 
 		var data = {
 			latlng: latlng,
-			bounds: bounds,
+			bounds: bounds
 		};
 
 		for (var i in pos.coords) {
@@ -8875,7 +8911,7 @@ L.Map.include({
   var LCCS, cssFiles,
     __slice = [].slice;
 
-  cssFiles = [".leaflet-image-layer,.leaflet-layer,.leaflet-map-pane,.leaflet-marker-icon,.leaflet-marker-pane,.leaflet-marker-shadow,.leaflet-overlay-pane,.leaflet-overlay-pane svg,.leaflet-popup-pane,.leaflet-shadow-pane,.leaflet-tile,.leaflet-tile-container,.leaflet-tile-pane,.leaflet-zoom-box{left:0;position:absolute;top:0}.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile{-webkit-user-drag:none;-webkit-user-select:none;-moz-user-select:none;user-select:none}.leaflet-container img{max-width:none!important}.leaflet-container img.leaflet-image-layer{max-width:15000px!important}.leaflet-tile{filter:inherit;visibility:hidden}.leaflet-tile-loaded{visibility:inherit}.leaflet-tile-pane{z-index:2}.leaflet-objects-pane{z-index:3}.leaflet-overlay-pane{z-index:4}.leaflet-shadow-pane{z-index:5}.leaflet-marker-pane{z-index:6}.leaflet-popup-pane{z-index:7}.leaflet-bottom,.leaflet-top{pointer-events:none;position:absolute;z-index:1000}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-control{clear:both;float:left;pointer-events:auto;position:relative;z-index:7}.leaflet-top .leaflet-control{margin-top:10px}.leaflet-bottom .leaflet-control{margin-bottom:10px}.leaflet-left .leaflet-control{margin-left:10px}.leaflet-right .leaflet-control{float:right;margin-right:10px}.leaflet-fade-anim .leaflet-popup,.leaflet-fade-anim .leaflet-tile{opacity:0;-webkit-transition:opacity 0.2s linear;-moz-transition:opacity 0.2s linear;-o-transition:opacity 0.2s linear;transition:opacity 0.2s linear}.leaflet-fade-anim .leaflet-map-pane .leaflet-popup,.leaflet-fade-anim .leaflet-tile-loaded{opacity:1}.leaflet-zoom-anim .leaflet-zoom-animated{-webkit-transition:-webkit-transform 0.25s cubic-bezier(0,0,0.25,1);-moz-transition:-moz-transform 0.25s cubic-bezier(0,0,0.25,1);-o-transition:-o-transform 0.25s cubic-bezier(0,0,0.25,1);transition:transform 0.25s cubic-bezier(0,0,0.25,1)}.leaflet-pan-anim .leaflet-tile,.leaflet-touching .leaflet-zoom-animated,.leaflet-zoom-anim .leaflet-tile{-webkit-transition:none;-moz-transition:none;-o-transition:none;transition:none}.leaflet-zoom-anim .leaflet-zoom-hide{visibility:hidden}.leaflet-clickable{cursor:pointer}.leaflet-control,.leaflet-popup-pane{cursor:auto}.leaflet-dragging,.leaflet-dragging .leaflet-clickable,.leaflet-dragging .leaflet-container{cursor:move;cursor:-webkit-grabbing;cursor:-moz-grabbing}.leaflet-container a{color:#0078a8}.leaflet-container a.leaflet-active{outline:2px solid orange}.leaflet-zoom-box{background:white;border:2px dotted #05f;height:0;opacity:0.5;width:0}.leaflet-container{background:#ddd;cursor:-webkit-grab;cursor:-moz-grab;font:12px/1.5 \"Helvetica Neue\" , Arial, Helvetica, sans-serif;outline:0;overflow:hidden;-ms-touch-action:none}.leaflet-bar{-webkit-border-radius:4px;border-radius:4px;box-shadow:0 1px 7px rgba(0,0,0,0.65)}.leaflet-bar a{background-color:#fff;border-bottom:1px solid #ccc;color:black;display:block;height:26px;line-height:26px;text-align:center;text-decoration:none;width:26px}.leaflet-bar a,.leaflet-control-layers-toggle{background-position:50% 50%;background-repeat:no-repeat;display:block}.leaflet-bar a:hover{background-color:#f4f4f4}.leaflet-bar a:first-child{-webkit-border-top-left-radius:4px;border-top-left-radius:4px;-webkit-border-top-right-radius:4px;border-top-right-radius:4px}.leaflet-bar a:last-child{border-bottom:0;-webkit-border-bottom-left-radius:4px;border-bottom-left-radius:4px;-webkit-border-bottom-right-radius:4px;border-bottom-right-radius:4px}.leaflet-bar a.leaflet-disabled{background-color:#f4f4f4;color:#bbb;cursor:default}.leaflet-touch .leaflet-bar{-webkit-border-radius:10px;border-radius:10px}.leaflet-touch .leaflet-bar a{height:30px;width:30px}.leaflet-touch .leaflet-bar a:first-child{-webkit-border-top-left-radius:7px;border-top-left-radius:7px;-webkit-border-top-right-radius:7px;border-top-right-radius:7px}.leaflet-touch .leaflet-bar a:last-child{border-bottom:0;-webkit-border-bottom-left-radius:7px;border-bottom-left-radius:7px;-webkit-border-bottom-right-radius:7px;border-bottom-right-radius:7px}.leaflet-control-zoom-in{font:bold 18px 'Lucida Console' , Monaco, monospace}.leaflet-control-zoom-out{font:bold 22px 'Lucida Console' , Monaco, monospace}.leaflet-touch .leaflet-control-zoom-in{font-size:22px;line-height:30px}.leaflet-touch .leaflet-control-zoom-out{font-size:28px;line-height:30px}.leaflet-control-layers{background:#f8f8f9;-webkit-border-radius:5px;border-radius:5px;box-shadow:0 1px 7px rgba(0,0,0,0.4)}.leaflet-control-layers-toggle{background-image:url(images/layers.png);height:36px;width:36px}.leaflet-retina .leaflet-control-layers-toggle{background-image:url(images/layers-2x.png);background-size:26px 26px}.leaflet-touch .leaflet-control-layers-toggle{height:44px;width:44px}.leaflet-control-layers .leaflet-control-layers-list,.leaflet-control-layers-expanded .leaflet-control-layers-toggle{display:none}.leaflet-control-layers-expanded .leaflet-control-layers-list{display:block;position:relative}.leaflet-control-layers-expanded{background:#fff;color:#333;padding:6px 10px 6px 6px}.leaflet-control-layers-selector{margin-top:2px;position:relative;top:1px}.leaflet-control-layers label,.leaflet-marker-icon,.leaflet-marker-shadow{display:block}.leaflet-control-layers-separator{border-top:1px solid #ddd;height:0;margin:5px -10px 5px -6px}.leaflet-container .leaflet-control-attribution{background-color:rgba(255,255,255,0.7);box-shadow:0 0 5px #bbb;margin:0}.leaflet-control-attribution,.leaflet-control-scale-line{color:#333;padding:0 5px}.leaflet-container .leaflet-control-attribution,.leaflet-container .leaflet-control-scale{font-size:11px}.leaflet-left .leaflet-control-scale{margin-left:5px}.leaflet-bottom .leaflet-control-scale{margin-bottom:5px}.leaflet-control-scale-line{background-color:rgba(255,255,255,0.5);border:2px solid #777;border-top:0;box-shadow:0 -1px 5px rgba(0,0,0,0.2);color:black;font-size:11px;line-height:1.1;overflow:hidden;padding:2px 5px 1px;text-shadow:1px 1px 1px #fff;white-space:nowrap}.leaflet-control-scale-line:not(:first-child){border-bottom:0;border-top:2px solid #777;box-shadow:0 2px 5px rgba(0,0,0,0.2);margin-top:-2px}.leaflet-control-scale-line:not(:first-child):not(:last-child){border-bottom:2px solid #777}.leaflet-touch .leaflet-control-attribution,.leaflet-touch .leaflet-control-layers,.leaflet-touch .leaflet-control-zoom{box-shadow:none}.leaflet-touch .leaflet-control-layers,.leaflet-touch .leaflet-control-zoom{border:4px solid rgba(0,0,0,0.3)}.leaflet-popup{position:absolute;text-align:center}.leaflet-popup-content-wrapper{-webkit-border-radius:12px;border-radius:12px;padding:1px;text-align:left}.leaflet-popup-content{line-height:1.4;margin:13px 19px}.leaflet-popup-content p{margin:18px 0}.leaflet-popup-tip-container{height:20px;margin:0 auto;overflow:hidden;position:relative;width:40px}.leaflet-popup-tip{height:17px;margin:-10px auto 0;padding:1px;-webkit-transform:rotate(45deg);-moz-transform:rotate(45deg);-ms-transform:rotate(45deg);-o-transform:rotate(45deg);transform:rotate(45deg);width:17px}.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:white;box-shadow:0 3px 14px rgba(0,0,0,0.4)}.leaflet-container a.leaflet-popup-close-button{background:transparent;color:#c3c3c3;font:16px/14px Tahoma,Verdana,sans-serif;font-weight:bold;height:14px;padding:4px 4px 0 0;position:absolute;right:0;text-align:center;text-decoration:none;top:0;width:18px}.leaflet-container a.leaflet-popup-close-button:hover{color:#999}.leaflet-popup-scrolled{border-bottom:1px solid #ddd;border-top:1px solid #ddd;overflow:auto}.leaflet-div-icon{background:#fff;border:1px solid #666}.leaflet-editing-icon{-webkit-border-radius:2px;border-radius:2px}", ".leaflet-vml-shape{height:1px;width:1px}.lvml{behavior:url(#default#VML);display:inline-block;position:absolute}.leaflet-control{display:inline}.leaflet-popup-tip{filter:progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678,M12=0.70710678,M21=-0.70710678,M22=0.70710678);-ms-filter:\"progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678)\";margin:0 auto;_margin-top:-3px;width:21px;_width:27px}.leaflet-popup-tip-container{margin-top:-1px}.leaflet-popup-content-wrapper,.leaflet-popup-tip{border:1px solid #999}.leaflet-popup-content-wrapper{zoom:1}.leaflet-control-layers,.leaflet-control-zoom{border:3px solid #999}.leaflet-control-attribution,.leaflet-control-layers,.leaflet-control-scale-line{background:white}.leaflet-zoom-box{filter:alpha(opacity=50)}.leaflet-control-attribution{border-left:1px solid #bbb;border-top:1px solid #bbb}"];
+  cssFiles = [".leaflet-image-layer,.leaflet-layer,.leaflet-map-pane,.leaflet-marker-icon,.leaflet-marker-pane,.leaflet-marker-shadow,.leaflet-overlay-pane,.leaflet-overlay-pane svg,.leaflet-popup-pane,.leaflet-shadow-pane,.leaflet-tile,.leaflet-tile-container,.leaflet-tile-pane,.leaflet-zoom-box{left:0;position:absolute;top:0}.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile{-webkit-user-drag:none;-webkit-user-select:none;-moz-user-select:none;user-select:none}.leaflet-container img{max-width:none!important}.leaflet-container img.leaflet-image-layer{max-width:15000px!important}.leaflet-tile{filter:inherit;visibility:hidden}.leaflet-tile-loaded{visibility:inherit}.leaflet-overlay-pane svg{-moz-user-select:none}.leaflet-tile-pane{z-index:2}.leaflet-objects-pane{z-index:3}.leaflet-overlay-pane{z-index:4}.leaflet-shadow-pane{z-index:5}.leaflet-marker-pane{z-index:6}.leaflet-popup-pane{z-index:7}.leaflet-bottom,.leaflet-top{pointer-events:none;position:absolute;z-index:1000}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-control{clear:both;float:left;pointer-events:auto;position:relative;z-index:7}.leaflet-top .leaflet-control{margin-top:10px}.leaflet-bottom .leaflet-control{margin-bottom:10px}.leaflet-left .leaflet-control{margin-left:10px}.leaflet-right .leaflet-control{float:right;margin-right:10px}.leaflet-fade-anim .leaflet-popup,.leaflet-fade-anim .leaflet-tile{opacity:0;-webkit-transition:opacity 0.2s linear;-moz-transition:opacity 0.2s linear;-o-transition:opacity 0.2s linear;transition:opacity 0.2s linear}.leaflet-fade-anim .leaflet-map-pane .leaflet-popup,.leaflet-fade-anim .leaflet-tile-loaded{opacity:1}.leaflet-zoom-anim .leaflet-zoom-animated{-webkit-transition:-webkit-transform 0.25s cubic-bezier(0,0,0.25,1);-moz-transition:-moz-transform 0.25s cubic-bezier(0,0,0.25,1);-o-transition:-o-transform 0.25s cubic-bezier(0,0,0.25,1);transition:transform 0.25s cubic-bezier(0,0,0.25,1)}.leaflet-pan-anim .leaflet-tile,.leaflet-touching .leaflet-zoom-animated,.leaflet-zoom-anim .leaflet-tile{-webkit-transition:none;-moz-transition:none;-o-transition:none;transition:none}.leaflet-zoom-anim .leaflet-zoom-hide{visibility:hidden}.leaflet-clickable{cursor:pointer}.leaflet-control,.leaflet-popup-pane{cursor:auto}.leaflet-dragging,.leaflet-dragging .leaflet-clickable,.leaflet-dragging .leaflet-container{cursor:move;cursor:-webkit-grabbing;cursor:-moz-grabbing}.leaflet-container a{color:#0078a8}.leaflet-container a.leaflet-active{outline:2px solid orange}.leaflet-zoom-box{background:white;border:2px dotted #05f;height:0;opacity:0.5;width:0}.leaflet-container{background:#ddd;cursor:-webkit-grab;cursor:-moz-grab;font:12px/1.5 \"Helvetica Neue\" , Arial, Helvetica, sans-serif;outline:0;overflow:hidden;-ms-touch-action:none}.leaflet-bar{-webkit-border-radius:4px;border-radius:4px;box-shadow:0 1px 7px rgba(0,0,0,0.65)}.leaflet-bar a,.leaflet-bar a:hover{background-color:#fff;border-bottom:1px solid #ccc;color:black;display:block;height:26px;line-height:26px;text-align:center;text-decoration:none;width:26px}.leaflet-bar a,.leaflet-control-layers-toggle{background-position:50% 50%;background-repeat:no-repeat;display:block}.leaflet-bar a:hover{background-color:#f4f4f4}.leaflet-bar a:first-child{-webkit-border-top-left-radius:4px;border-top-left-radius:4px;-webkit-border-top-right-radius:4px;border-top-right-radius:4px}.leaflet-bar a:last-child{border-bottom:0;-webkit-border-bottom-left-radius:4px;border-bottom-left-radius:4px;-webkit-border-bottom-right-radius:4px;border-bottom-right-radius:4px}.leaflet-bar a.leaflet-disabled{background-color:#f4f4f4;color:#bbb;cursor:default}.leaflet-touch .leaflet-bar{-webkit-border-radius:10px;border-radius:10px}.leaflet-touch .leaflet-bar a{height:30px;width:30px}.leaflet-touch .leaflet-bar a:first-child{-webkit-border-top-left-radius:7px;border-top-left-radius:7px;-webkit-border-top-right-radius:7px;border-top-right-radius:7px}.leaflet-touch .leaflet-bar a:last-child{border-bottom:0;-webkit-border-bottom-left-radius:7px;border-bottom-left-radius:7px;-webkit-border-bottom-right-radius:7px;border-bottom-right-radius:7px}.leaflet-control-zoom-in{font:bold 18px 'Lucida Console' , Monaco, monospace}.leaflet-control-zoom-out{font:bold 22px 'Lucida Console' , Monaco, monospace}.leaflet-touch .leaflet-control-zoom-in{font-size:22px;line-height:30px}.leaflet-touch .leaflet-control-zoom-out{font-size:28px;line-height:30px}.leaflet-control-layers{background:#f8f8f9;-webkit-border-radius:5px;border-radius:5px;box-shadow:0 1px 7px rgba(0,0,0,0.4)}.leaflet-control-layers-toggle{background-image:url(images/layers.png);height:36px;width:36px}.leaflet-retina .leaflet-control-layers-toggle{background-image:url(images/layers-2x.png);background-size:26px 26px}.leaflet-touch .leaflet-control-layers-toggle{height:44px;width:44px}.leaflet-control-layers .leaflet-control-layers-list,.leaflet-control-layers-expanded .leaflet-control-layers-toggle{display:none}.leaflet-control-layers-expanded .leaflet-control-layers-list{display:block;position:relative}.leaflet-control-layers-expanded{background:#fff;color:#333;padding:6px 10px 6px 6px}.leaflet-control-layers-selector{margin-top:2px;position:relative;top:1px}.leaflet-control-layers label,.leaflet-marker-icon,.leaflet-marker-shadow{display:block}.leaflet-control-layers-separator{border-top:1px solid #ddd;height:0;margin:5px -10px 5px -6px}.leaflet-container .leaflet-control-attribution{background-color:rgba(255,255,255,0.7);box-shadow:0 0 5px #bbb;margin:0}.leaflet-control-attribution,.leaflet-control-scale-line{color:#333;padding:0 5px}.leaflet-container .leaflet-control-attribution,.leaflet-container .leaflet-control-scale{font-size:11px}.leaflet-left .leaflet-control-scale{margin-left:5px}.leaflet-bottom .leaflet-control-scale{margin-bottom:5px}.leaflet-control-scale-line{background-color:rgba(255,255,255,0.5);border:2px solid #777;border-top:0;box-shadow:0 -1px 5px rgba(0,0,0,0.2);color:black;font-size:11px;line-height:1.1;overflow:hidden;padding:2px 5px 1px;text-shadow:1px 1px 1px #fff;white-space:nowrap}.leaflet-control-scale-line:not(:first-child){border-bottom:0;border-top:2px solid #777;box-shadow:0 2px 5px rgba(0,0,0,0.2);margin-top:-2px}.leaflet-control-scale-line:not(:first-child):not(:last-child){border-bottom:2px solid #777}.leaflet-touch .leaflet-bar,.leaflet-touch .leaflet-control-attribution,.leaflet-touch .leaflet-control-layers{box-shadow:none}.leaflet-touch .leaflet-bar,.leaflet-touch .leaflet-control-layers{border:4px solid rgba(0,0,0,0.3)}.leaflet-popup{position:absolute;text-align:center}.leaflet-popup-content-wrapper{-webkit-border-radius:12px;border-radius:12px;padding:1px;text-align:left}.leaflet-popup-content{line-height:1.4;margin:13px 19px}.leaflet-popup-content p{margin:18px 0}.leaflet-popup-tip-container{height:20px;margin:0 auto;overflow:hidden;position:relative;width:40px}.leaflet-popup-tip{height:17px;margin:-10px auto 0;padding:1px;-webkit-transform:rotate(45deg);-moz-transform:rotate(45deg);-ms-transform:rotate(45deg);-o-transform:rotate(45deg);transform:rotate(45deg);width:17px}.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:white;box-shadow:0 3px 14px rgba(0,0,0,0.4)}.leaflet-container a.leaflet-popup-close-button{background:transparent;color:#c3c3c3;font:16px/14px Tahoma,Verdana,sans-serif;font-weight:bold;height:14px;padding:4px 4px 0 0;position:absolute;right:0;text-align:center;text-decoration:none;top:0;width:18px}.leaflet-container a.leaflet-popup-close-button:hover{color:#999}.leaflet-popup-scrolled{border-bottom:1px solid #ddd;border-top:1px solid #ddd;overflow:auto}.leaflet-div-icon{background:#fff;border:1px solid #666}.leaflet-editing-icon{-webkit-border-radius:2px;border-radius:2px}", ".leaflet-vml-shape{height:1px;width:1px}.lvml{behavior:url(#default#VML);display:inline-block;position:absolute}.leaflet-control{display:inline}.leaflet-popup-tip{filter:progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678,M12=0.70710678,M21=-0.70710678,M22=0.70710678);-ms-filter:\"progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678)\";margin:0 auto;_margin-top:-3px;width:21px;_width:27px}.leaflet-popup-tip-container{margin-top:-1px}.leaflet-popup-content-wrapper,.leaflet-popup-tip{border:1px solid #999}.leaflet-popup-content-wrapper{zoom:1}.leaflet-control-layers,.leaflet-control-zoom{border:3px solid #999}.leaflet-control-attribution,.leaflet-control-layers,.leaflet-control-scale-line{background:white}.leaflet-zoom-box{filter:alpha(opacity=50)}.leaflet-control-attribution{border-left:1px solid #bbb;border-top:1px solid #bbb}"];
 
   LCCS = (function() {
 
