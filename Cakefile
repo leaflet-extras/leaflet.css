@@ -85,7 +85,7 @@ task 'bundle', 'bundle it', () ->
 		else if file[0] is "url"
 			request file[1], (e,r,b)->
 				cb e, b
-	async.map [["url","https://raw.github.com/Leaflet/Leaflet/stable/dist/leaflet.css"],["url","https://raw.github.com/Leaflet/Leaflet/stable/dist/leaflet.ie.css"],["file","leaflet.css.coffee"],["url","https://raw.github.com/Leaflet/Leaflet/stable/dist/leaflet-src.js"]],rf, (e,files)->
+	async.map [["url","http://cdn.leafletjs.com/leaflet-0.6.4/leaflet.css"],["url","http://cdn.leafletjs.com/leaflet-0.6.4/leaflet.ie.css"],["file","leaflet.css.coffee"],["url","http://cdn.leafletjs.com/leaflet-0.6.4/leaflet-src.js"]],rf, (e,files)->
 		unless e
 			css = JSON.stringify [cssc.compress(files[0]),cssc.compress(files[1])]
 			cst = coffee.compile "cssFiles = #{ css }\n#{ files[2] }"
