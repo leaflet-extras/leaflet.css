@@ -1,0 +1,23 @@
+{
+  "name": "leaflet-css",
+  "version": "0.1.0",
+  "homepage": "https://github.com/leaflet-extras/leaflet.css",
+  "authors": [
+    "Calvin Metcalf <calvin.metcalf@state.ma.us>"
+  ],
+  "description": "leaflet including css",
+  "main": "dist/leaflet.css.min.js",
+  "keywords": [
+    "leaflet",
+    "gis",
+    "mapping"
+  ],
+  "license": "BSD 2 clause",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ]
+}
